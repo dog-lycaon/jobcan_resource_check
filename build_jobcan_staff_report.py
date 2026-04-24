@@ -17,16 +17,13 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin
 from extract_staff_names import GET_RECORD_URL, build_params, normalize_text
 from fetch_jobcan_man_hours import (
-    ADMIN_URL,
-    ATTENDANCE_URL,
-    DEFAULT_BROWSER,
     MAN_HOUR_URL,
     build_search_period,
     find_group_id,
     get_request,
-    login_to_jobcan_id,
+    open_man_hour_session,
 )
-from login_jobcan import SIGN_IN_URL, load_config
+from login_jobcan import SUPPORTED_BROWSERS, load_config
 
 
 BASE_URL = "https://ssl.jobcan.jp"
@@ -277,20 +274,6 @@ def report_output_stem(config: dict[str, Any], group_name: str) -> str:
     return f"{year_text}_{month:02d}_{safe_filename(group_name)}"
 
 
-def create_session(config: dict[str, Any], timeout: float, browser: str | None = None):
-    opener = login_to_jobcan_id(config, timeout, browser)
-    with opener.open(get_request(ATTENDANCE_URL, SIGN_IN_URL), timeout=timeout) as response:
-        response.read()
-        attendance_url = response.geturl()
-    with opener.open(get_request(ADMIN_URL, attendance_url), timeout=timeout) as response:
-        response.read()
-        admin_url = response.geturl()
-    with opener.open(get_request(MAN_HOUR_URL, admin_url), timeout=timeout) as response:
-        man_hour_html = response.read()
-        man_hour_url = response.geturl()
-    return opener, admin_url, man_hour_url, man_hour_html
-
-
 def fetch_record_json(opener, man_hour_url: str, config: dict[str, Any], group_id: str, timeout: float) -> dict[str, Any]:
     params = build_params(config, group_id)
     url = f"{GET_RECORD_URL}?{urlencode(params, doseq=True)}"
@@ -491,7 +474,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument(
         "--browser",
-        choices=["edge", "chrome", "firefox"],
+        choices=SUPPORTED_BROWSERS,
     )
     return parser.parse_args()
 
@@ -513,9 +496,9 @@ def main() -> int:
         charts_dir.mkdir(exist_ok=True)
 
         progress("Logging in to Jobcan and opening man-hour page")
-        opener, _admin_url, man_hour_url, man_hour_html = create_session(config, args.timeout, args.browser)
+        session = open_man_hour_session(config, args.timeout, args.browser)
         progress("Man-hour page fetched. Resolving target group id")
-        group_id = find_group_id(man_hour_html, group_name)
+        group_id = find_group_id(session.man_hour_html, group_name)
         period = build_search_period(int(config["month"]), config.get("year"))
         period_text = (
             f"{period.from_year:04d}-{period.from_month:02d}-{period.from_day:02d} "
@@ -524,7 +507,7 @@ def main() -> int:
         progress(f"Target period: {period_text}")
 
         progress("Fetching staff list")
-        record_json = fetch_record_json(opener, man_hour_url, config, group_id, args.timeout)
+        record_json = fetch_record_json(session.opener, session.man_hour_url, config, group_id, args.timeout)
         (args.output_dir / "record.json").write_text(
             json.dumps(record_json, ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -537,7 +520,7 @@ def main() -> int:
         for index, staff in enumerate(staff_links, start=1):
             reports.append(
                 fetch_staff_report(
-                    opener,
+                    session.opener,
                     staff,
                     charts_dir,
                     charts_dir_name,

@@ -14,16 +14,13 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from fetch_jobcan_man_hours import (
-    ADMIN_URL,
-    ATTENDANCE_URL,
-    DEFAULT_BROWSER,
     MAN_HOUR_URL,
     build_search_period,
     find_group_id,
     get_request,
-    login_to_jobcan_id,
+    open_man_hour_session,
 )
-from login_jobcan import SIGN_IN_URL, load_config
+from login_jobcan import SUPPORTED_BROWSERS, load_config
 
 
 GET_RECORD_URL = f"{MAN_HOUR_URL}/get-record"
@@ -108,25 +105,12 @@ def fetch_record_json(
     timeout: float,
     browser: str | None = None,
 ) -> dict[str, Any]:
-    opener = login_to_jobcan_id(config, timeout, browser)
-
-    with opener.open(get_request(ATTENDANCE_URL, SIGN_IN_URL), timeout=timeout) as response:
-        response.read()
-        attendance_url = response.geturl()
-
-    with opener.open(get_request(ADMIN_URL, attendance_url), timeout=timeout) as response:
-        response.read()
-        admin_url = response.geturl()
-
-    with opener.open(get_request(MAN_HOUR_URL, admin_url), timeout=timeout) as response:
-        man_hour_html = response.read()
-        man_hour_url = response.geturl()
-
-    group_id = find_group_id(man_hour_html, group_name)
+    session = open_man_hour_session(config, timeout, browser)
+    group_id = find_group_id(session.man_hour_html, group_name)
     params = build_params(config, group_id)
     url = f"{GET_RECORD_URL}?{urlencode(params, doseq=True)}"
 
-    with opener.open(get_request(url, man_hour_url), timeout=timeout) as response:
+    with session.opener.open(get_request(url, session.man_hour_url), timeout=timeout) as response:
         body = response.read().decode("utf-8", errors="replace")
 
     return json.loads(body)
@@ -174,7 +158,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument(
         "--browser",
-        choices=["edge", "chrome", "firefox"],
+        choices=SUPPORTED_BROWSERS,
     )
     parser.add_argument(
         "--save-json",

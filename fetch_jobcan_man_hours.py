@@ -17,9 +17,9 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request
 
 from login_jobcan import (
-    DEFAULT_BROWSER,
     DEFAULT_USER_AGENT,
     SIGN_IN_URL,
+    SUPPORTED_BROWSERS,
     create_authenticated_opener,
     load_config,
 )
@@ -37,6 +37,14 @@ class SearchPeriod:
     to_year: int
     to_month: int
     to_day: int
+
+
+@dataclass(frozen=True)
+class ManHourSession:
+    opener: Any
+    admin_url: str
+    man_hour_url: str
+    man_hour_html: bytes
 
 
 class GroupOptionParser(HTMLParser):
@@ -142,6 +150,28 @@ def login_to_jobcan_id(config: dict[str, Any], timeout: float, browser: str | No
     return opener
 
 
+def open_man_hour_session(config: dict[str, Any], timeout: float, browser: str | None = None) -> ManHourSession:
+    opener = login_to_jobcan_id(config, timeout, browser)
+    with opener.open(get_request(ATTENDANCE_URL, SIGN_IN_URL), timeout=timeout) as response:
+        response.read()
+        attendance_url = response.geturl()
+
+    with opener.open(get_request(ADMIN_URL, attendance_url), timeout=timeout) as response:
+        response.read()
+        admin_url = response.geturl()
+
+    with opener.open(get_request(MAN_HOUR_URL, admin_url), timeout=timeout) as response:
+        man_hour_html = response.read()
+        man_hour_url = response.geturl()
+
+    return ManHourSession(
+        opener=opener,
+        admin_url=admin_url,
+        man_hour_url=man_hour_url,
+        man_hour_html=man_hour_html,
+    )
+
+
 def find_group_id(html: bytes, group_name: str) -> str:
     parser = GroupOptionParser(group_name)
     parser.feed(html.decode("utf-8", errors="replace"))
@@ -160,21 +190,8 @@ def fetch_search_result(
     timeout: float,
     browser: str | None = None,
 ) -> tuple[str, bytes, SearchPeriod, str]:
-    opener = login_to_jobcan_id(config, timeout, browser)
-
-    with opener.open(get_request(ATTENDANCE_URL, SIGN_IN_URL), timeout=timeout) as response:
-        response.read()
-        attendance_url = response.geturl()
-
-    with opener.open(get_request(ADMIN_URL, attendance_url), timeout=timeout) as response:
-        response.read()
-        admin_url = response.geturl()
-
-    with opener.open(get_request(MAN_HOUR_URL, admin_url), timeout=timeout) as response:
-        man_hour_html = response.read()
-        man_hour_url = response.geturl()
-
-    group_id = find_group_id(man_hour_html, group_name)
+    session = open_man_hour_session(config, timeout, browser)
+    group_id = find_group_id(session.man_hour_html, group_name)
     period = build_search_period(int(config["month"]), config.get("year"))
     today = date.today()
 
@@ -194,7 +211,7 @@ def fetch_search_result(
         "work_kind[]": ["0", "-1", "-1", "-1", "-1", "-1", "-1", "-1"],
     }
 
-    with opener.open(post_request(MAN_HOUR_URL, search_form, man_hour_url), timeout=timeout) as response:
+    with session.opener.open(post_request(MAN_HOUR_URL, search_form, session.man_hour_url), timeout=timeout) as response:
         body = response.read()
         final_url = response.geturl()
 
@@ -211,7 +228,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=20.0)
     parser.add_argument(
         "--browser",
-        choices=["edge", "chrome", "firefox"],
+        choices=SUPPORTED_BROWSERS,
     )
     return parser.parse_args()
 

@@ -11,7 +11,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import HTTPCookieProcessor, Request, build_opener
@@ -28,7 +28,20 @@ BASE_URL = "https://id.jobcan.jp"
 SIGN_IN_URL = f"{BASE_URL}/users/sign_in"
 ATTENDANCE_URL = "https://ssl.jobcan.jp/jbcoauth/login"
 DEFAULT_USER_AGENT = "Mozilla/5.0 (compatible; python-jobcan-login/1.0)"
-DEFAULT_BROWSER = "chrome"
+SUPPORTED_BROWSERS = ("chrome", "edge", "firefox")
+
+
+class BrowserDriverConfig(NamedTuple):
+    webdriver_class: Any
+    options_class: Any
+    service_class: Any
+
+
+BROWSER_DRIVER_CONFIGS = {
+    "chrome": BrowserDriverConfig(webdriver.Chrome, webdriver.ChromeOptions, ChromeService),
+    "edge": BrowserDriverConfig(webdriver.Edge, webdriver.EdgeOptions, EdgeService),
+    "firefox": BrowserDriverConfig(webdriver.Firefox, webdriver.FirefoxOptions, FirefoxService),
+}
 
 
 def load_config(path: Path) -> dict[str, Any]:
@@ -36,22 +49,21 @@ def load_config(path: Path) -> dict[str, Any]:
         return json.load(file)
 
 
-def browser_paths_from_config(config: dict[str, Any]) -> dict[str, Path]:
-    raw_paths = config.get("browser_paths", {})
+def paths_from_config(config: dict[str, Any], key: str) -> dict[str, Path]:
+    raw_paths = config.get(key, {})
     return {
         browser: Path(str(raw_path))
         for browser, raw_path in raw_paths.items()
-        if browser in {"chrome", "edge", "firefox"} and raw_path
+        if browser in SUPPORTED_BROWSERS and raw_path
     }
+
+
+def browser_paths_from_config(config: dict[str, Any]) -> dict[str, Path]:
+    return paths_from_config(config, "browser_paths")
 
 
 def driver_paths_from_config(config: dict[str, Any]) -> dict[str, Path]:
-    raw_paths = config.get("driver_paths", {})
-    return {
-        browser: Path(str(raw_path))
-        for browser, raw_path in raw_paths.items()
-        if browser in {"chrome", "edge", "firefox"} and raw_path
-    }
+    return paths_from_config(config, "driver_paths")
 
 
 def resolve_browser_choice(config: dict[str, Any], browser: str | None = None) -> tuple[str, Path | None]:
@@ -116,53 +128,23 @@ def path_without(entries: list[Path]):
 
 def create_webdriver(browser: str, binary_path: Path | None = None, driver_path: Path | None = None):
     browser = browser.lower()
+    browser_config = BROWSER_DRIVER_CONFIGS.get(browser)
+    if not browser_config:
+        raise ValueError(f"Unsupported browser: {browser}")
 
-    if browser == "edge":
-        options = webdriver.EdgeOptions()
-        if binary_path:
-            options.binary_location = str(binary_path)
-        if driver_path:
-            try:
-                return webdriver.Edge(
-                    service=EdgeService(executable_path=str(driver_path)),
-                    options=options,
-                )
-            except WebDriverException:
-                pass
-        with path_without([driver_path.parent] if driver_path else []):
-            return webdriver.Edge(options=options)
-
-    if browser == "chrome":
-        options = webdriver.ChromeOptions()
-        if binary_path:
-            options.binary_location = str(binary_path)
-        if driver_path:
-            try:
-                return webdriver.Chrome(
-                    service=ChromeService(executable_path=str(driver_path)),
-                    options=options,
-                )
-            except WebDriverException:
-                pass
-        with path_without([driver_path.parent] if driver_path else []):
-            return webdriver.Chrome(options=options)
-
-    if browser == "firefox":
-        options = webdriver.FirefoxOptions()
-        if binary_path:
-            options.binary_location = str(binary_path)
-        if driver_path:
-            try:
-                return webdriver.Firefox(
-                    service=FirefoxService(executable_path=str(driver_path)),
-                    options=options,
-                )
-            except WebDriverException:
-                pass
-        with path_without([driver_path.parent] if driver_path else []):
-            return webdriver.Firefox(options=options)
-
-    raise ValueError(f"Unsupported browser: {browser}")
+    options = browser_config.options_class()
+    if binary_path:
+        options.binary_location = str(binary_path)
+    if driver_path:
+        try:
+            return browser_config.webdriver_class(
+                service=browser_config.service_class(executable_path=str(driver_path)),
+                options=options,
+            )
+        except WebDriverException:
+            pass
+    with path_without([driver_path.parent] if driver_path else []):
+        return browser_config.webdriver_class(options=options)
 
 
 def webdriver_cookie_to_cookiejar(cookie: dict[str, Any]) -> http.cookiejar.Cookie:
@@ -302,7 +284,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-o", "--output", type=Path)
     parser.add_argument("--timeout", type=float, default=15.0)
     parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
-    parser.add_argument("--browser", choices=["edge", "chrome", "firefox"])
+    parser.add_argument("--browser", choices=SUPPORTED_BROWSERS)
     return parser.parse_args()
 
 
