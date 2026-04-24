@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+jobcan_man_hour_search.html
+jobcan_man_hour_record.json
+jobcan_staff_report/
