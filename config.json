@@ -8,7 +8,7 @@
     "firefox": ""
   },
   "driver_paths": {
-    "chrome": "",
+    "chrome": "C:\\Program Files\\Google\\Chrome\\Application\\chromedriver.exe",
     "edge": "",
     "firefox": ""
   }
